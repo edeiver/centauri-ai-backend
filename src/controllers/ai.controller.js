@@ -1,38 +1,134 @@
-const pool = require('../db');
 const fetch = require('node-fetch');
+const pool = require('../db');
 
 exports.getInsights = async (req, res) => {
     try {
-        const result = await pool.query(
-            'SELECT * FROM transactions WHERE user_id = $1',
+        // 1. Revisar cache
+        const userResult = await pool.query(
+            'SELECT last_insights, insights_updated_at FROM users WHERE id = $1',
             [req.userId]
         );
 
-        const txs = result.rows;
+        const user = userResult.rows[0];
 
+        if (user?.last_insights && user?.insights_updated_at) {
+            const now = new Date();
+            const lastUpdate = new Date(user.insights_updated_at);
+
+            const diffHours = (now - lastUpdate) / (1000 * 60 * 60);
+
+            // 🔥 Si no han pasado 6 horas → devolver cache
+            if (diffHours < 6) {
+                return res.json(user.last_insights);
+            }
+        }
+
+        // 2. Obtener transacciones
+        const result = await pool.query(
+            `SELECT type, amount, category 
+       FROM transactions 
+       WHERE user_id = $1 
+       ORDER BY created_at DESC 
+       LIMIT 50`,
+            [req.userId]
+        );
+
+        const transactions = result.rows;
+
+        // 3. Agrupar gastos
+        const summary = {};
+
+        transactions.forEach(tx => {
+            if (tx.type === 'expense') {
+                const category = tx.category || 'otros';
+                summary[category] = (summary[category] || 0) + Number(tx.amount);
+            }
+        });
+
+        // 4. Prompt
         const prompt = `
-Analiza estos gastos:
-${JSON.stringify(txs)}
+Eres un experto financiero.
 
-Da recomendaciones claras y cortas.
+Analiza estos gastos por categoría:
+${JSON.stringify(summary)}
+
+Responde SOLO en JSON válido con esta estructura:
+
+{
+  "insights": ["string"],
+  "recommendations": ["string"],
+  "warnings": ["string"]
+}
+
+Reglas:
+- Máximo 3 items por lista
+- Frases cortas
+- Nada fuera del JSON
 `;
 
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                Authorization: `Bearer ${process.env.OPENAI_KEY}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model: 'gpt-4.1',
-                messages: [{ role: 'user', content: prompt }],
-            }),
-        });
+        // 5. Llamada a Gemini
+        const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [
+                        {
+                            parts: [{ text: prompt }],
+                        },
+                    ],
+                }),
+            }
+        );
 
         const data = await response.json();
 
-        res.json(data);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+        let text =
+            data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+        // 6. Limpiar respuesta
+        const cleanText = text
+            .replace(/```json/g, '')
+            .replace(/```/g, '')
+            .trim();
+
+        // 7. Parse seguro
+        let parsed;
+
+        try {
+            parsed = JSON.parse(cleanText);
+        } catch (err) {
+            parsed = {
+                insights: [],
+                recommendations: [],
+                warnings: ['No se pudo generar análisis']
+            };
+        }
+
+        // 8. Validar estructura
+        parsed.insights = Array.isArray(parsed.insights) ? parsed.insights : [];
+        parsed.recommendations = Array.isArray(parsed.recommendations) ? parsed.recommendations : [];
+        parsed.warnings = Array.isArray(parsed.warnings) ? parsed.warnings : [];
+
+        // 9. Guardar en DB 🔥
+        await pool.query(
+            `UPDATE users 
+       SET last_insights = $1, insights_updated_at = NOW()
+       WHERE id = $2`,
+            [parsed, req.userId]
+        );
+
+        // 10. Responder
+        res.json(parsed);
+
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            insights: [],
+            recommendations: [],
+            warnings: ['Error interno']
+        });
     }
 };
