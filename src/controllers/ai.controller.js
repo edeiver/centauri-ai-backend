@@ -2,7 +2,7 @@ const pool = require('../db');
 
 exports.getInsights = async (req, res) => {
     try {
-        if (!process.env.GEMINI_API_KEY) {
+        if (!process.env.ANTHROPIC_API_KEY) {
             return res.status(500).json({
                 insights: [],
                 recommendations: [],
@@ -73,17 +73,24 @@ Reglas:
 - Nada fuera del JSON
 `;
 
-        // 5. Llamada a Gemini
+        // 5. Llamada a Claude
         const response = await fetch(
-            `https://generativelanguage.googleapis.com/v1/models/gemini-3.6-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+            'https://api.anthropic.com/v1/messages',
             {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'x-api-key': process.env.ANTHROPIC_API_KEY,
+                    'anthropic-version': '2023-06-01',
+                    'content-type': 'application/json',
+                },
                 signal: AbortSignal.timeout(15000),
                 body: JSON.stringify({
-                    contents: [
+                    model: 'claude-haiku-4-5-20251001',
+                    max_tokens: 1024,
+                    messages: [
                         {
-                            parts: [{ text: prompt }],
+                            role: 'user',
+                            content: prompt,
                         },
                     ],
                 }),
@@ -92,14 +99,13 @@ Reglas:
 
         if (!response.ok) {
             const errorBody = await response.text();
-            console.error('Gemini error body:', errorBody);
-            throw new Error(`Gemini request failed with status ${response.status}`);
+            console.error('Claude error body:', errorBody);
+            throw new Error(`Claude request failed with status ${response.status}`);
         }
 
         const data = await response.json();
 
-        let text =
-            data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        let text = data?.content?.[0]?.text || '';
 
         // 6. Limpiar respuesta
         const cleanText = text

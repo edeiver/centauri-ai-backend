@@ -41,7 +41,8 @@ The server listens on `process.env.PORT`, falling back to `3000` if unset.
 | `DATABASE_URL`        | PostgreSQL connection string, e.g. `postgresql://user:pass@host:5432/dbname`. |
 | `JWT_SECRET`          | Secret used to sign short-lived access tokens.            |
 | `JWT_REFRESH_SECRET`  | Secret used to sign long-lived refresh tokens. Must differ from `JWT_SECRET`. |
-| `GEMINI_API_KEY`      | API key for Google Gemini, used to generate spending insights. |
+| `ANTHROPIC_API_KEY`   | API key for the Anthropic Messages API, used to generate spending insights. |
+| `GEMINI_API_KEY`      | Unused by the current code (kept for reference/rollback). Spending insights now call Claude via `ANTHROPIC_API_KEY`. |
 
 See `.env.example` for a template. Never commit a real `.env` file.
 
