@@ -1,6 +1,39 @@
 const pool = require('../db');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const verifyToken = require('../middlewares/auth');
+
+const usernameRegex = /^[a-zA-Z0-9_]{3,30}$/;
+const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const hashToken = (token) => {
+    return crypto.createHash('sha256').update(token).digest('hex');
+};
+
+const validateRegisterPayload = ({ username, password, email }) => {
+    if (!usernameRegex.test(username || '')) {
+        return 'Username must be 3-30 characters and use only letters, numbers, or underscores';
+    }
+
+    if (!emailRegex.test(email || '')) {
+        return 'Email must be valid';
+    }
+
+    if (typeof password !== 'string' || password.length < 8) {
+        return 'Password must be at least 8 characters';
+    }
+
+    return null;
+};
+
+const validateLoginPayload = ({ username, password }) => {
+    if (!username || typeof username !== 'string' || !password || typeof password !== 'string') {
+        return 'Username and password are required';
+    }
+
+    return null;
+};
 
 const generateAccessToken = (user) => {
     return jwt.sign(
@@ -21,14 +54,19 @@ const generateRefreshToken = (user) => {
 exports.register = async (req, res) => {
     try {
         const { username, password, email } = req.body;
+        const validationError = validateRegisterPayload({ username, password, email });
+
+        if (validationError) {
+            return res.status(400).json({ error: validationError });
+        }
 
         const existing = await pool.query(
-            'SELECT id FROM users WHERE username = $1',
-            [username]
+            'SELECT id FROM users WHERE username = $1 OR email = $2',
+            [username, email]
         );
 
         if (existing.rows.length > 0) {
-            return res.status(400).json({ error: 'Username already registered' });
+            return res.status(409).json({ error: 'Username or email already registered' });
         }
 
         const hashed = await bcrypt.hash(password, 10);
@@ -40,13 +78,19 @@ exports.register = async (req, res) => {
 
         res.status(201).json(result.rows[0]);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: 'Internal server error' });
     }
 };
 
 exports.login = async (req, res) => {
     try {
         const { username, password } = req.body;
+        const validationError = validateLoginPayload({ username, password });
+
+        if (validationError) {
+            return res.status(400).json({ error: validationError });
+        }
 
         const result = await pool.query(
             'SELECT * FROM users WHERE username = $1',
@@ -56,13 +100,13 @@ exports.login = async (req, res) => {
         const user = result.rows[0];
 
         if (!user) {
-            return res.status(400).json({ error: 'User not found' });
+            return res.status(401).json({ error: 'Invalid credentials' });
         }
 
         const valid = await bcrypt.compare(password, user.password);
 
         if (!valid) {
-            return res.status(400).json({ error: 'Invalid password' });
+            return res.status(401).json({ error: 'Invalid credentials' });
         }
 
         const accessToken = generateAccessToken(user);
@@ -70,7 +114,7 @@ exports.login = async (req, res) => {
 
         await pool.query(
             'UPDATE users SET refresh_token = $1 WHERE id = $2',
-            [refreshToken, user.id]
+            [hashToken(refreshToken), user.id]
         );
 
         res.json({
@@ -78,7 +122,8 @@ exports.login = async (req, res) => {
             refreshToken
         });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: 'Internal server error' });
     }
 };
 
@@ -109,15 +154,25 @@ exports.refresh = async (req, res) => {
             return res.status(403).json({ error: 'User not found' });
         }
 
-        if (user.refresh_token !== refreshToken) {
+        if (user.refresh_token !== hashToken(refreshToken)) {
             return res.status(403).json({ error: 'Refresh token does not match' });
         }
 
         const newAccessToken = generateAccessToken(user);
+        const newRefreshToken = generateRefreshToken(user);
 
-        res.json({ accessToken: newAccessToken });
+        await pool.query(
+            'UPDATE users SET refresh_token = $1 WHERE id = $2',
+            [hashToken(newRefreshToken), user.id]
+        );
+
+        res.json({
+            accessToken: newAccessToken,
+            refreshToken: newRefreshToken
+        });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: 'Internal server error' });
     }
 };
 
@@ -134,32 +189,17 @@ exports.logout = async (req, res) => {
 
             if (payload?.userId) {
                 await pool.query(
-                    'UPDATE users SET refresh_token = NULL WHERE id = $1',
-                    [payload.userId]
+                    'UPDATE users SET refresh_token = NULL WHERE id = $1 AND refresh_token = $2',
+                    [payload.userId, hashToken(refreshToken)]
                 );
             }
         }
 
         res.json({ message: 'Logged out' });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error(err);
+        res.status(500).json({ error: 'Internal server error' });
     }
 };
 
-exports.verifyToken = (req, res, next) => {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'Token required' });
-    }
-
-    const token = authHeader.split(' ')[1];
-
-    try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        req.user = decoded;
-        next();
-    } catch (err) {
-        return res.status(403).json({ error: 'Invalid or expired token' });
-    }
-};
+exports.verifyToken = verifyToken;

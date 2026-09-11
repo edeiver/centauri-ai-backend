@@ -1,8 +1,15 @@
-const fetch = require('node-fetch');
 const pool = require('../db');
 
 exports.getInsights = async (req, res) => {
     try {
+        if (!process.env.GEMINI_API_KEY) {
+            return res.status(500).json({
+                insights: [],
+                recommendations: [],
+                warnings: ['AI service is not configured']
+            });
+        }
+
         // 1. Revisar cache
         const userResult = await pool.query(
             'SELECT last_insights, insights_updated_at FROM users WHERE id = $1',
@@ -72,6 +79,7 @@ Reglas:
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                signal: AbortSignal.timeout(15000),
                 body: JSON.stringify({
                     contents: [
                         {
@@ -81,6 +89,10 @@ Reglas:
                 }),
             }
         );
+
+        if (!response.ok) {
+            throw new Error(`Gemini request failed with status ${response.status}`);
+        }
 
         const data = await response.json();
 

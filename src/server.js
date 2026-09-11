@@ -1,9 +1,6 @@
 require('dotenv').config();
 const app = require('./app');
-const userRoutes = require('./routes/user.routes');
-const PORT = 3000;
-
-app.use('/user', userRoutes);
+const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
     console.log(`Servidor corriendo en puerto ${PORT}`);
