@@ -91,6 +91,8 @@ Reglas:
         );
 
         if (!response.ok) {
+            const errorBody = await response.text();
+            console.error('Gemini error body:', errorBody);
             throw new Error(`Gemini request failed with status ${response.status}`);
         }
 
