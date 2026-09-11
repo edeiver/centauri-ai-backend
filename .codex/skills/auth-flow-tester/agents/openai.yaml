@@ -1,0 +1,4 @@
+interface:
+  display_name: "Auth Flow Tester"
+  short_description: "Test Express JWT auth flows"
+  default_prompt: "Use $auth-flow-tester to add focused tests for this backend auth flow."
